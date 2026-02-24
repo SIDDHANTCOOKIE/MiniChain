@@ -112,7 +112,7 @@ def make_network_handler(chain, mempool):
                 # Drain matching txs from mempool so they aren't re-mined
                 mempool.get_transactions_for_block()
             else:
-                logger.warning("📥 Received Block #%d — rejected", block.get("index", "?"))
+                logger.warning("📥 Received Block #%s — rejected", getattr(block, "index", "?"))
 
     return handler
 
