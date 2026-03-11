@@ -74,6 +74,8 @@ def load(path: str = ".") -> Blockchain:
 
     if not isinstance(raw_blocks, list) or not raw_blocks:
         raise ValueError(f"Invalid or empty chain data in '{chain_path}'")
+    if not isinstance(raw_accounts, dict):
+        raise ValueError(f"Invalid accounts data in '{state_path}'")
 
     blockchain = Blockchain.__new__(Blockchain)   # skip __init__ (no genesis)
     import threading
