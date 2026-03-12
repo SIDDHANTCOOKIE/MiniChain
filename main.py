@@ -31,6 +31,7 @@ from minichain import Transaction, Blockchain, Block, State, Mempool, P2PNetwork
 logger = logging.getLogger(__name__)
 
 BURN_ADDRESS = "0" * 40
+MAX_TRANSACTIONS_PER_BLOCK = 100
 
 
 # ──────────────────────────────────────────────
@@ -49,7 +50,9 @@ def create_wallet():
 
 def mine_and_process_block(chain, mempool, miner_pk):
     """Mine pending transactions into a new block."""
-    pending_txs = mempool.get_transactions_for_block(chain.state)
+    pending_txs = mempool.get_transactions_for_block(
+        chain.state, max_count=MAX_TRANSACTIONS_PER_BLOCK
+    )
     if not pending_txs:
         logger.info("Mempool is empty — nothing to mine.")
         return None
@@ -83,6 +86,9 @@ def make_network_handler(chain, mempool):
         payload = data.get("data")
 
         if msg_type == "sync":
+            if not isinstance(payload, dict):
+                logger.warning("Received malformed sync payload")
+                return
             # Merge remote state into local state (for accounts we don't have yet)
             remote_accounts = payload.get("accounts", {})
             for addr, acc in remote_accounts.items():
@@ -92,30 +98,38 @@ def make_network_handler(chain, mempool):
             logger.info("🔄 State sync complete — %d accounts", len(chain.state.accounts))
 
         elif msg_type == "tx":
+            if not isinstance(payload, dict):
+                logger.warning("Received malformed tx payload")
+                return
             tx = Transaction(**payload)
             if mempool.add_transaction(tx):
                 logger.info("📥 Received tx from %s... (amount=%s)", tx.sender[:8], tx.amount)
 
         elif msg_type == "block":
-            txs_raw = payload.pop("transactions", [])
-            block_hash = payload.pop("hash", None)
+            if not isinstance(payload, dict):
+                logger.warning("Received malformed block payload")
+                return
+            payload_data = dict(payload)
+
+            txs_raw = payload_data.get("transactions", [])
+            block_hash = payload_data.get("hash")
             transactions = [Transaction(**t) for t in txs_raw]
 
             block = Block(
-                index=payload["index"],
-                previous_hash=payload["previous_hash"],
+                index=payload_data["index"],
+                previous_hash=payload_data["previous_hash"],
                 transactions=transactions,
-                timestamp=payload.get("timestamp"),
-                difficulty=payload.get("difficulty"),
+                timestamp=payload_data.get("timestamp"),
+                difficulty=payload_data.get("difficulty"),
             )
-            block.nonce = payload.get("nonce", 0)
+            block.nonce = payload_data.get("nonce", 0)
             block.hash = block_hash
 
             if chain.add_block(block):
                 logger.info("📥 Received Block #%d — added to chain", block.index)
 
                 # Apply mining reward for the remote miner (burn address as placeholder)
-                miner = payload.get("miner", BURN_ADDRESS)
+                miner = payload_data.get("miner", BURN_ADDRESS)
                 chain.state.credit_mining_reward(miner)
 
                 # Drop only confirmed transactions so higher nonces can remain queued.
@@ -147,7 +161,7 @@ HELP_TEXT = """
 """
 
 
-async def cli_loop(sk, pk, chain, mempool, network, nonce_counter):
+async def cli_loop(sk, pk, chain, mempool, network):
     """Read commands from stdin asynchronously."""
     loop = asyncio.get_event_loop()
     print(HELP_TEXT)
@@ -179,18 +193,23 @@ async def cli_loop(sk, pk, chain, mempool, network, nonce_counter):
                 print("  Usage: send <receiver_address> <amount>")
                 continue
             receiver = parts[1]
+            if len(receiver) != len(pk) or not re.fullmatch(r"[0-9a-fA-F]+", receiver):
+                print("  Receiver address must be a valid hex public key.")
+                continue
             try:
                 amount = int(parts[2])
             except ValueError:
                 print("  Amount must be an integer.")
                 continue
+            if amount <= 0:
+                print("  Amount must be greater than 0.")
+                continue
 
-            nonce = nonce_counter[0]
+            nonce = chain.state.get_account(pk)["nonce"]
             tx = Transaction(sender=pk, receiver=receiver, amount=amount, nonce=nonce)
             tx.sign(sk)
 
             if mempool.add_transaction(tx):
-                nonce_counter[0] += 1
                 await network.broadcast_transaction(tx)
                 print(f"  ✅ Tx sent: {amount} coins → {receiver[:12]}...")
             else:
@@ -201,9 +220,6 @@ async def cli_loop(sk, pk, chain, mempool, network, nonce_counter):
             mined = mine_and_process_block(chain, mempool, pk)
             if mined:
                 await network.broadcast_block(mined, miner=pk)
-                # Sync local nonce from chain state
-                acc = chain.state.get_account(pk)
-                nonce_counter[0] = acc.get("nonce", 0)
 
         # ── peers ──
         elif cmd == "peers":
@@ -288,11 +304,8 @@ async def run_node(port: int, connect_to: str | None, fund: int):
         except ValueError:
             logger.error("Invalid --connect format. Use host:port")
 
-    # Nonce counter kept as a mutable list so the CLI closure can mutate it
-    nonce_counter = [0]
-
     try:
-        await cli_loop(sk, pk, chain, mempool, network, nonce_counter)
+        await cli_loop(sk, pk, chain, mempool, network)
     finally:
         await network.stop()
 

@@ -62,7 +62,7 @@ class Mempool:
             self._seen_tx_ids.add(tx_id)
             return True
 
-    def get_transactions_for_block(self, state=None):
+    def get_transactions_for_block(self, state=None, max_count=None):
         """
         Returns ready transactions only.
 
@@ -80,6 +80,10 @@ class Mempool:
                     expected_nonce += 1
 
             selected.sort(key=lambda tx: (tx.timestamp, tx.sender, tx.nonce))
+            if max_count is not None:
+                if not isinstance(max_count, int) or max_count <= 0:
+                    return []
+                selected = selected[:max_count]
             self._remove_transactions_unlocked(selected)
             return selected
 
