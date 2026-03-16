@@ -19,6 +19,8 @@ Commands (type in the terminal while the node is running):
 import argparse
 import asyncio
 import logging
+import os
+import re
 import sys
 
 from nacl.signing import SigningKey
@@ -271,11 +273,23 @@ async def cli_loop(sk, pk, chain, mempool, network):
 # Main entry point
 # ──────────────────────────────────────────────
 
-async def run_node(port: int, connect_to: str | None, fund: int):
+async def run_node(port: int, connect_to: str | None, fund: int, datadir: str | None):
     """Boot the node, optionally connect to a peer, then enter the CLI."""
     sk, pk = create_wallet()
 
-    chain = Blockchain()
+    # Load existing chain from disk, or start fresh
+    chain = None
+    if datadir and os.path.exists(os.path.join(datadir, "blockchain.json")):
+        try:
+            from minichain.persistence import load
+            chain = load(datadir)
+            logger.info("Restored chain from '%s'", datadir)
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning("Could not load saved chain: %s — starting fresh", e)
+
+    if chain is None:
+        chain = Blockchain()
+
     mempool = Mempool()
     network = P2PNetwork()
 
@@ -313,6 +327,11 @@ async def run_node(port: int, connect_to: str | None, fund: int):
     try:
         await cli_loop(sk, pk, chain, mempool, network)
     finally:
+        # Save chain to disk on shutdown
+        if datadir:
+            from minichain.persistence import save
+            save(chain, datadir)
+            logger.info("Chain saved to '%s'", datadir)
         await network.stop()
 
 
@@ -321,6 +340,7 @@ def main():
     parser.add_argument("--port", type=int, default=9000, help="TCP port to listen on (default: 9000)")
     parser.add_argument("--connect", type=str, default=None, help="Peer address to connect to (host:port)")
     parser.add_argument("--fund", type=int, default=100, help="Initial coins to fund this wallet (default: 100)")
+    parser.add_argument("--datadir", type=str, default=None, help="Directory to save/load blockchain state (enables persistence)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -330,7 +350,7 @@ def main():
     )
 
     try:
-        asyncio.run(run_node(args.port, args.connect, args.fund))
+        asyncio.run(run_node(args.port, args.connect, args.fund, args.datadir))
     except KeyboardInterrupt:
         print("\nNode shut down.")
 
