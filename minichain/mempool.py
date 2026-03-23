@@ -17,8 +17,7 @@ class Mempool:
             return False
 
         with self._lock:
-            pool = self._pool.setdefault(tx.sender, {})
-            existing = pool.get(tx.nonce)
+            existing = self._pool.get(tx.sender, {}).get(tx.nonce)
 
             if existing and existing.tx_id == tx.tx_id:
                 logger.warning("Mempool: Duplicate transaction rejected %s", tx.tx_id)
@@ -28,14 +27,16 @@ class Mempool:
                 return False
 
             self._size += 0 if existing else 1
+            pool = self._pool.setdefault(tx.sender, {})
             pool[tx.nonce] = tx
             return True
 
     def get_transactions_for_block(self):
         with self._lock:
             txs = [t for pool in self._pool.values() for t in pool.values()]
-            txs.sort(key=lambda t: (t.timestamp, t.sender, t.nonce))
-            return txs[: self.transactions_per_block]
+            
+        txs.sort(key=lambda t: (t.timestamp, t.sender, t.nonce))
+        return txs[: self.transactions_per_block]
 
     def remove_transactions(self, transactions):
         with self._lock:
