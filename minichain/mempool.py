@@ -29,11 +29,11 @@ class Mempool:
                     logger.warning("Mempool: Ignoring older replacement %s", tx.tx_id)
                     return False
                 
-            if not existing and self._size >= self.max_size:
-                logger.warning("Mempool: Full, rejecting transaction")
-                return False
-
-            self._size += 1
+            else:
+                if self._size >= self.max_size:
+                    logger.warning("Mempool: Full, rejecting transaction")
+                    return False
+                self._size += 1
             self._pool.setdefault(tx.sender, {})[tx.nonce] = tx
             return True
 
@@ -51,7 +51,7 @@ class Mempool:
             
             for sender, txs in snapshot.items():
                 if txs:
-                    if best_tx is None or txs[0].timestamp < best_tx.timestamp:
+                    if best_tx is None or (txs[0].timestamp, sender, txs[0].nonce) < (best_tx.timestamp, best_sender, best_tx.nonce):
                         best_tx = txs[0]
                         best_sender = sender
                         
